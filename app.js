@@ -40,7 +40,10 @@
     return;
   }
 
-  var DPR = Math.min(window.devicePixelRatio || 1, 1.75);
+  var DPR_CAP = 2;   /* верхний предел плотности пикселей холста: на экранах с масштабом 200% рисуем в родном разрешении */
+  var quality = 1;   /* 0.72..1: автоматически снижается, если машина не тянет */
+  var SS = 1;        /* суперсэмплинг: на обычных экранах (масштаб < 150%) сцену рисуем крупнее холста и сжимаем */
+  var DPR = Math.min(window.devicePixelRatio || 1, DPR_CAP);
   renderer.setPixelRatio(DPR);
   renderer.setSize(window.innerWidth, window.innerHeight);
   stage.appendChild(renderer.domElement);
@@ -178,7 +181,12 @@
       '  float fz = fbm2((p + vec2(0.0, e)) * 2.4);',
       '  vec3 bump = vec3(f0 - fx, 0.0, f0 - fz) / e;',
       '  float bumpAmt = 0.24 * exp(-dist * 0.040);',
-      '  vec3 N = normalize(Ng + bump * bumpAmt);',
+      /* мелкое зерно снега: убирает «размазанность» крупного шума на малых углах обзора */
+      '  float e2 = 0.02;',
+      '  float g0 = n2(p * 11.0);',
+      '  vec3 fine = vec3(g0 - n2((p + vec2(e2, 0.0)) * 11.0), 0.0, g0 - n2((p + vec2(0.0, e2)) * 11.0)) / e2;',
+      '  float fineAmt = 0.02 * exp(-dist * 0.12);',
+      '  vec3 N = normalize(Ng + bump * bumpAmt + fine * fineAmt);',
       '  vec3 L = normalize(vec3(-0.45, 0.75, 0.5));',
       '  float diff = max(dot(N, L), 0.0);',
       '  float hemi = mix(0.34, 0.66, N.y * 0.5 + 0.5);',
@@ -186,15 +194,15 @@
       '  float rockMix = smoothstep(0.34, 0.56, slope + (f0 - 0.5) * 0.28);',
       '  vec3 snow = vec3(0.70, 0.74, 0.82);',
       '  vec3 rock = vec3(0.23, 0.24, 0.28);',
-      '  vec3 albedo = mix(snow, rock, rockMix) * (0.80 + 0.40 * f0);',
+      '  vec3 albedo = mix(snow, rock, rockMix) * (0.80 + 0.40 * f0 + (g0 - 0.5) * 0.16 * exp(-dist * 0.08));',
       '  vec3 col = albedo * (hemi * 0.55 + diff * 0.50);',
-      '  vec2 pe = vec2(p.x * 0.45, p.y);',
-      '  float pool = exp(-dot(pe, pe) * 0.10);',
-      '  col += rainbow(uTime * 0.12 + (p.x + 3.07) * 0.16) * pool * uGlow * 0.34;',
+      '  vec2 pe = vec2(p.x * 0.40, p.y * 0.9);',
+      '  float pool = exp(-dot(pe, pe) * 0.45);',
+      '  col += rainbow(uTime * 0.12 + (p.x + 3.07) * 0.16) * pool * uGlow * 0.20;',
       '  vec2 sp = vec2(p.x * 0.40, p.y + 0.3);',
       '  col *= 1.0 - 0.30 * exp(-dot(sp, sp) * 0.45);',
       '  float fog = 1.0 - exp(-pow(dist * 0.026, 2.0));',
-      '  fog = max(fog, 0.30 * exp(-max(vW.y + 2.15, 0.0) * 0.30));',
+      '  fog = max(fog, 0.16 * exp(-max(vW.y + 2.15, 0.0) * 0.30));',
       '  vec3 fogC = skyCol(gl_FragCoord.y / uRes.y);',
       '  col = mix(col, fogC, clamp(fog, 0.0, 1.0));',
       '  gl_FragColor = vec4(col, 1.0);',
@@ -388,7 +396,7 @@
       '  vec2 c = gl_PointCoord * 2.0 - 1.0;',
       '  float r2 = dot(c, c);',
       '  if (r2 > 1.0) discard;',
-      '  float alpha = 1.0 - smoothstep(0.6, 1.0, r2);',
+      '  float alpha = 1.0 - smoothstep(0.78, 1.0, r2);',
       /* нормаль «шарика»-спрайта из пространства вида в мировое */
       '  vec3 Ns = vec3(c.x, -c.y, sqrt(1.0 - r2)) * mat3(viewMatrix);',
       '  vec3 N = normalize(normalize(vN) * 0.8 + Ns * 0.6);',
@@ -634,18 +642,29 @@
     '  float tick = floor(uTime * 9.0);',
     '  float hit = step(0.93, hh(vec2(row, tick))) * smoothstep(0.15, 0.9, uCA);',
     '  uv.x += hit * (hh(vec2(row, tick + 3.0)) - 0.5) * 0.05 * uCA;',
-    '  float amt = 0.0010 + r2 * 0.0065 + uCA * 0.020;',
-    '  vec3 acc = vec3(0.0); vec3 wsum = vec3(0.0);',
-    '  for (int i = 0; i < 9; i++) {',
-    '    float t = float(i) / 8.0;',
-    '    vec3 w = vec3(max(1.0 - t * 2.0, 0.0), 1.0 - abs(t * 2.0 - 1.0), max(t * 2.0 - 1.0, 0.0));',
-    '    acc += texture2D(tScene, uv + dir * amt * (t - 0.5) * 2.0).rgb * w;',
-    '    wsum += w;',
+    /* в покое сдвигаются только красный и синий каналы у самых краёв, зелёный остаётся чётким;
+       размазанная «радуга» из девяти выборок включается только при рывке */
+    '  vec3 base = texture2D(tScene, uv).rgb;',
+    '  float amt = r2 * 0.0016 + uCA * 0.020;',
+    '  vec3 col = vec3(texture2D(tScene, uv - dir * amt).r, base.g, texture2D(tScene, uv + dir * amt).b);',
+    '  if (uCA > 0.02) {',
+    '    vec3 acc = vec3(0.0); vec3 wsum = vec3(0.0);',
+    '    for (int i = 0; i < 9; i++) {',
+    '      float t = float(i) / 8.0;',
+    '      vec3 w = vec3(max(1.0 - t * 2.0, 0.0), 1.0 - abs(t * 2.0 - 1.0), max(t * 2.0 - 1.0, 0.0));',
+    '      acc += texture2D(tScene, uv + dir * amt * (t - 0.5) * 2.0).rgb * w;',
+    '      wsum += w;',
+    '    }',
+    '    col = mix(col, acc / wsum, smoothstep(0.02, 0.10, uCA));',
     '  }',
-    '  vec3 col = acc / wsum;',
-    '  col += (texture2D(tB1, vUv).rgb * 0.70 + texture2D(tB2, vUv).rgb * 1.10) * uBloom;',
+    /* лёгкое повышение резкости (unsharp mask) с ограничением, чтобы не было ореолов вокруг свечения */
+    '  vec2 tx = 1.0 / uRes;',
+    '  vec3 nb = (texture2D(tScene, uv + vec2(tx.x, 0.0)).rgb + texture2D(tScene, uv - vec2(tx.x, 0.0)).rgb',
+    '           + texture2D(tScene, uv + vec2(0.0, tx.y)).rgb + texture2D(tScene, uv - vec2(0.0, tx.y)).rgb) * 0.25;',
+    '  col += clamp(base - nb, -0.25, 0.25) * 0.45;',
+    '  col += (texture2D(tB1, vUv).rgb * 0.55 + texture2D(tB2, vUv).rgb * 0.85) * uBloom;',
     '  col *= 1.0 - 0.30 * smoothstep(0.18, 0.95, r2 * 2.0);',
-    '  col += (hh(vUv * uRes + fract(uTime) * 91.7) - 0.5) * 0.035;',
+    '  col += (hh(vUv * uRes + fract(uTime) * 91.7) - 0.5) * 0.026;',
     '  col = max(col, vec3(0.0));',
     '  vec3 hi = max(col - 0.75, vec3(0.0));',
     '  col = min(col, vec3(0.75)) + 0.25 * (1.0 - exp(-hi / 0.25));',
@@ -654,14 +673,19 @@
     '}'
   ].join('\n'), {
     tScene: { value: rtScene.texture }, tB1: { value: rtB1a.texture }, tB2: { value: rtB2b.texture },
-    uRes: shared.uRes, uTime: shared.uTime, uCA: { value: 0 }, uBloom: { value: 0.30 }
+    uRes: shared.uRes, uTime: shared.uTime, uCA: { value: 0 }, uBloom: { value: 0.20 }
   });
 
   /* ---------- размеры ---------- */
   function resize() {
     var w = window.innerWidth, h = window.innerHeight;
+    var devDpr = window.devicePixelRatio || 1;   /* плотность могла измениться: масштаб страницы, другой монитор */
+    DPR = Math.min(devDpr, DPR_CAP);
+    SS = devDpr < 1.5 ? 1.35 : 1;
+    renderer.setPixelRatio(DPR);
     renderer.setSize(w, h);
-    var bw = Math.max(2, Math.floor(w * DPR)), bh = Math.max(2, Math.floor(h * DPR));
+    var rs = Math.min(DPR * SS * quality, 4096 / Math.max(w, h));   /* масштаб буфера сцены относительно CSS-пикселей */
+    var bw = Math.max(2, Math.floor(w * rs)), bh = Math.max(2, Math.floor(h * rs));
     rtScene.setSize(bw, bh);
     var w1 = Math.max(2, bw >> 2), h1 = Math.max(2, bh >> 2);
     var w2 = Math.max(2, bw >> 3), h2 = Math.max(2, bh >> 3);
@@ -976,12 +1000,29 @@
   var t0 = performance.now(), last = t0, hudAt = 0, shown = false, readyAt = t0 + 900;
   var lookAt = new THREE.Vector3(0, 0.1, 0);
 
+  /* авто-качество: если кадры стабильно медленнее ~25 к/с, понижаем разрешение рендера, при запасе возвращаем */
+  var perfSum = 0, perfN = 0, perfCool = 0;
+  function watchPerformance(rawDt, now) {
+    if (rawDt < 0.004 || rawDt > 0.12) return;   /* паузы фоновой вкладки не учитываем */
+    perfSum += rawDt; perfN++;
+    if (perfN < 90) return;
+    var avg = perfSum / perfN;
+    perfSum = 0; perfN = 0;
+    if (now < perfCool) return;
+    if (avg > 0.040 && quality > 0.72) {
+      quality = Math.max(0.72, quality - 0.14); perfCool = now + 2500; resize();
+    } else if (avg < 0.019 && quality < 1) {
+      quality = Math.min(1, quality + 0.07); perfCool = now + 6000; resize();
+    }
+  }
+
   function frame(now) {
     requestAnimationFrame(frame);
     var t = (now - t0) / 1000;
     var rawDt = (now - last) / 1000;
     var dt = Math.min(rawDt, 0.05);
     last = now;
+    watchPerformance(rawDt, now);
     shared.uTime.value = t;
 
     var target = paused ? 0 : BASE_SPEED;
