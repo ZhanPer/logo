@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ITtop Spin</title>
+  <meta name="description" content="Вращающийся 3D-логотип ITtop: камень, туман и светящиеся швы.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="stage" aria-hidden="true"></div>
+
+  <header class="ui tl">
+    <div class="mark">ITtop</div>
+    <div>// Вращающийся логотип</div>
+    <div>// WebGL, 2026</div>
+  </header>
+
+  <aside class="ui tr">
+    <div class="slashes">////// Управление</div>
+    <p>Водите курсором по буквам: частицы разлетаются, как пыль. Быстрое движение рассыпает надпись целиком, и она медленно собирается обратно. Рядом летает пчела: она тоже сдувает пыль. Тяните мышью, чтобы раскрутить, колесо разгоняет, пробел ставит на паузу.</p>
+  </aside>
+
+  <footer class="ui bl"><span id="hud-spin">Скорость: 0.70 рад/с</span></footer>
+  <footer class="ui br"><span id="hud-state">[ пробел ] пауза</span></footer>
+
+  <div id="loader"><span id="loader-text">---=+=----</span></div>
+  <div id="nogl" hidden>Не удалось запустить WebGL в этом браузере.</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+  <script>window.THREE || document.write('<script src="https://unpkg.com/three@0.149.0/build/three.min.js"><\/script>');</script>
+  <script src="app.js"></script>
+</body>
+</html>
